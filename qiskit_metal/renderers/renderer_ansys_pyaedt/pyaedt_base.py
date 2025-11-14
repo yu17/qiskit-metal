@@ -498,7 +498,7 @@ class QPyaedt(QRendererAnalysis):
         # Don't need to add the version: Version of AEDT to use.
         # The default is None, in which case the active setup or latest installed version is used.
         desktop = Desktop(specified_version=None,
-                          non_graphical=False,
+                          non_graphical=True,
                           new_desktop_session=True,
                           close_on_exit=False,
                           student_version=False)
@@ -567,6 +567,58 @@ class QPyaedt(QRendererAnalysis):
             pathlib.WindowsPath: path to png formatted screenshot.
         """
         pass
+
+    def initialize_cap_extract(self, **kwargs):
+        """Any task that needs to occur before running a simulation, such as creating a setup
+
+        Returns:
+            str: Name of the setup that has been updated
+        """
+
+        return kwargs['name']
+
+    def execute_design(
+        self,
+        design_name: str,
+        solution_type: str,
+        vars_to_initialize: Dict,
+        force_redraw: bool = False,
+        **design_selection,
+    ) -> str:
+        """It wraps the render_design() method to
+        1. skip rendering if the "selection" of components is left empty (re-uses selected design)
+        2. force design clearing and redraw if force_Redraw is set
+
+        Args:
+            design_name (str): Name to assign to the renderer design
+            solution_type (str): eigenmode, capacitive or drivenmodal
+            vars_to_initialize (Dict): Variables to initialize, i.e. Ljx, Cjx
+            force_redraw (bool, optional): Force re-render the design. Defaults to False.
+
+        Returns:
+            str: final design name (a suffix might have been added to the provided name,
+                in case of conflicts)
+        """
+        # If a selection of components is not specified, use the active renderer-design
+        #if "selection" in design_selection:
+        #    if design_selection["selection"] is None:
+        #        try:
+        #            return self.pinfo.design.name
+        #        except AttributeError:
+        #            # if no design exists, then we will proceed and render the full design instead
+        #            pass
+
+        # either create a new one, or clear the active one, depending on force_redraw.
+        #if force_redraw and (design_name
+        #                     in self.pinfo.project.get_design_names()):
+        #    self.activate_ansys_design(design_name, solution_type)
+        #    self.clean_active_design()
+        #else:
+        #    self.new_ansys_design(design_name, solution_type)
+
+        #self.set_variables(vars_to_initialize)
+        self.render_design(**design_selection)
+        return self.design_name
 
     # pylint: disable=arguments-differ
     def render_design(self,

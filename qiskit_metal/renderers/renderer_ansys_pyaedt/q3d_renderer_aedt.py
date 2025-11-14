@@ -368,15 +368,52 @@ class QQ3DPyaedt(QPyaedt):
                     f'Within Ansys, press simulation in the tab, then validate (green check mark).'
                 )
 
+        self.current_setup_name = setup_name
+
     # Below commands are from a notebook which shows abstraction usage.
     # c2.sim.capacitance_matrix, c2.sim.units = q3d.get_capacitance_matrix()
     # c2.sim.capacitance_all_passes, _ = q3d.get_capacitance_all_passes()
     # c2.sim.capacitance_matrix
 
-    def get_capacitance_matrix(self):
-        a = 5
+    def get_capacitance_matrix(self,
+                               variation: str = '',
+                               solution_kind: str = 'LastAdaptive',
+                               pass_number: int = 1):
 
-    def get_capacitance_all_passes(self, setup_name: str) -> Union[dict, None]:
+        self.current_app.export_matrix_data(
+            file_name=f"{self.current_setup_name}_c_mat.txt",
+            variations=variation,
+            sweep=f'{solution_kind}',
+            matrix_type="Maxwell",
+            use_sci_notation=True)
+        all_C_matrices = self.current_app.matrices[0].get_sources_for_plot()
+
+        if len(all_C_matrices) == 0:
+            self.design.logger.warning(
+                f'There are no capacitance matrixes to return.'
+                f'Did you execute analyze_setup()?')
+            return None
+
+        # Pandas output should have been set prior to opening Ansys,
+        # however, just confirming if changed by user through GUI.
+        settings.enable_pandas_output = True
+
+        setup_sweep_name = f'{self.current_setup_name}: {solution_kind}'
+        cap_data = self.current_app.post.get_solution_data(
+            expressions=all_C_matrices,
+            context="Original",
+            setup_sweep_name=setup_sweep_name,
+            variations={"Pass": ["All"]})
+
+        cap_mag = cap_data.full_matrix_mag_phase[0].iloc[0]
+        cap_mag_df = self.convert_to_dataframe(cap_mag)
+
+        c1_units = cap_data.units_data
+        c1_units = list(c1_units.values())[0]
+
+        return cap_mag_df,c1_units
+
+    def get_capacitance_all_passes(self, setup_name: str = '') -> Union[dict, None]:
         """ASSUME analyze_setup() has already happened.
         Get the magnitude of solution data in pandas data
         format for each pass.
@@ -406,7 +443,7 @@ class QQ3DPyaedt(QPyaedt):
         # however, just confirming if changed by user through GUI.
         settings.enable_pandas_output = True
 
-        setup_sweep_name = f'{setup_name}: AdaptivePass'
+        setup_sweep_name = f'{self.current_setup_name}: AdaptivePass'
         cap_data = self.current_app.post.get_solution_data(
             expressions=all_C_matrices,
             context="Original",
@@ -431,7 +468,30 @@ class QQ3DPyaedt(QPyaedt):
                 cap_mag_df = self.convert_to_dataframe(cap_mag)
                 all_cap_data_magnitude.append(cap_mag_df)
             all_cap_data_magnitude_freqs[freq] = all_cap_data_magnitude
-        return all_cap_data_magnitude_freqs
+        return all_cap_data_magnitude_freqs, None
+
+    def get_convergence(self) -> bool:
+        """Extracts convergence from Ansys simulation result
+        """
+        # If 'LastAdaptive' is used, then the pass_number won't affect anything.
+        # If 'AdaptivePass' is used, then the pass_number is used.
+        self.current_app.export_convergence(self.current_setup_name, file_path=f"{self.current_setup_name}_convergence.txt",)
+
+        with open(f"{self.current_setup_name}_convergenceCG.txt", "r") as f:
+            lines=f.readlines()
+
+        for line in lines:
+            if line.startswith("Target"):
+                target=float(line.split(":")[1].strip())
+            elif line.startswith("Current"):
+                current=float(line.split(":")[1].strip())
+            elif line.startswith("Minimum"):
+                minimum=float(line.split(":")[1].strip())
+
+        if current<=target and minimum>1:
+            return True
+        else:
+            return False
 
     def convert_to_dataframe(
         self, cap_series: pd.core.series.Series
