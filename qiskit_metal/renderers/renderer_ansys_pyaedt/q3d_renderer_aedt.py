@@ -550,7 +550,7 @@ class QQ3DPyaedt(QPyaedt):
         # return {i:all_cap_data_magnitude[i].values*df_unit.values for i in range(1,len(all_cap_data_magnitude))}, None
 
         df_cmat, units = self.get_capacitance_matrix(variation=variation)
-        conv = 1e-12 if units == "pf" else 1
+        conv = 1e-12 if units == "pF" else 1
         return {1:df_cmat.values*conv}, None
 
     def get_convergence(self) -> bool:
