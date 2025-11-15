@@ -11,6 +11,9 @@ import pandas as pd
 import numpy as np
 import shapely
 
+# For reading CSV from string(required by pandas)
+from io import StringIO
+import re
 
 class QQ3DPyaedt(QPyaedt):
     """
@@ -380,95 +383,175 @@ class QQ3DPyaedt(QPyaedt):
                                solution_kind: str = 'LastAdaptive',
                                pass_number: int = 1):
 
+        # all_C_matrices = self.current_app.matrices[0].get_sources_for_plot()
+
+        # if len(all_C_matrices) == 0:
+        #     self.design.logger.warning(
+        #         f'There are no capacitance matrixes to return.'
+        #         f'Did you execute analyze_setup()?')
+        #     return None
+
+        # # Pandas output should have been set prior to opening Ansys,
+        # # however, just confirming if changed by user through GUI.
+        # settings.enable_pandas_output = True
+
+        # setup_sweep_name = f'{self.current_setup_name}: {solution_kind}'
+        # cap_data = self.current_app.post.get_solution_data(
+        #     expressions=all_C_matrices,
+        #     context="Original",
+        #     setup_sweep_name=setup_sweep_name,
+        #     variations={"Pass": ["All"]})
+
+        # cap_mag = cap_data.full_matrix_mag_phase[0].iloc[0]
+        # cap_mag_df = self.convert_to_dataframe(cap_mag)
+
+        # c1_units = cap_data.units_data
+        # c1_units = list(c1_units.values())[0]
+
+        # The original implementation does not seem to fetch the correct matrix
+        # This implementation uses the same trick as that in pyEPR to read the matrix
+        # (i.e. let ansys export the matrix to a file and then read from it)
         self.current_app.export_matrix_data(
             file_name=f"{self.current_setup_name}_c_mat.txt",
             variations=variation,
             sweep=f'{solution_kind}',
             matrix_type="Maxwell",
             use_sci_notation=True)
-        all_C_matrices = self.current_app.matrices[0].get_sources_for_plot()
 
-        if len(all_C_matrices) == 0:
-            self.design.logger.warning(
-                f'There are no capacitance matrixes to return.'
-                f'Did you execute analyze_setup()?')
-            return None
+        #pd.set_option('display.float_format', '{:.8E}'.format)
 
-        # Pandas output should have been set prior to opening Ansys,
-        # however, just confirming if changed by user through GUI.
-        settings.enable_pandas_output = True
+        with open(f"{self.current_setup_name}_c_mat.txt","r") as f:
+            lines = f.readlines()
 
-        setup_sweep_name = f'{self.current_setup_name}: {solution_kind}'
-        cap_data = self.current_app.post.get_solution_data(
-            expressions=all_C_matrices,
-            context="Original",
-            setup_sweep_name=setup_sweep_name,
-            variations={"Pass": ["All"]})
+        text=''.join(lines)
 
-        cap_mag = cap_data.full_matrix_mag_phase[0].iloc[0]
-        cap_mag_df = self.convert_to_dataframe(cap_mag)
+        s1 = text.split("Capacitance Matrix")
+        assert len(s1) == 2, "Could not split text to `Capacitance Matrix`"
 
-        c1_units = cap_data.units_data
-        c1_units = list(c1_units.values())[0]
+        s2 = s1[1].split("Conductance Matrix")
+
+        df_cmat = pd.read_csv(
+            StringIO(s2[0].strip()),
+            delim_whitespace=True,
+            skipinitialspace=True,
+            index_col=0,
+        )
+        units = re.findall(r"C Units:(.*?),", text)[0]
+
+        if len(s2) > 1:
+            df_cond = pd.read_csv(
+                StringIO(s2[1].strip()),
+                delim_whitespace=True,
+                skipinitialspace=True,
+                index_col=0,
+            )
+            units_cond = re.findall(r"G Units:(.*?)\n", text)[0]
+        else:
+            df_cond = None
+            units_cond = None
+
+        var = re.findall(r"DesignVariation:(.*?)\n", text)  # this changed circa v2020
+        if len(var) < 1:  # didnt find
+            var = re.findall(r"Design Variation:(.*?)\n", text)
+            if len(var) < 1:  # didnt find
+                # May not be present if there are no design variations to begin
+                # with and no variables in the design.
+                pass  # logger.error(f'Failed to parse Q3D matrix Design Variation:\nFile:{path}\nText:{text}')
+
+                var = [""]
+        design_variation = var[0]
+
+        return df_cmat, units
+
+        # Assuming units to be `pF` and converting to `F`
+        cap_mag_df = cap_mag_df*1e-12
 
         return cap_mag_df,c1_units
 
-    def get_capacitance_all_passes(self, setup_name: str = '') -> Union[dict, None]:
+    def get_capacitance_all_passes(self, variation: str = '') -> Union[dict, None]:
         """ASSUME analyze_setup() has already happened.
         Get the magnitude of solution data in pandas data
         format for each pass.
 
         Args:
-            setup_name (str): Name of setup which has already been
-                            used for analyze_setup().
+            variation (str, optional): An empty string returns nominal variation.
+                Otherwise need the list. Defaults to ''.
 
         Returns:
-            Union[dict, None]: Key - freq in GHz  Value is a list.  The 0 th index is key, the
-            1st entry is the 1st pass is a pandas dataframe of capacitance matrix. (magnitude)
-            2nd entry is the 2nd pass is a pandas dataframe of capacitance matrix. (magnitude)
-            etc....
-
-            If analyze_setup has not been run, return None.
-
+            dict, str: dict of numpy.ndarray containing the capacitance matrix
+                for each simulation pass, and units.
+                The keys are integer indices starting from 1 (only to maintain compatibility with the original implementation in `q3d_renderer.py`)
         """
-        all_C_matrices = self.current_app.matrices[0].get_sources_for_plot()
+        # all_C_matrices = self.current_app.matrices[0].get_sources_for_plot()
 
-        if len(all_C_matrices) == 0:
-            self.design.logger.warning(
-                f'There are no capacitance matrixes to return.'
-                f'Did you execute analyze_setup()?')
-            return None
+        # if len(all_C_matrices) == 0:
+        #     self.design.logger.warning(
+        #         f'There are no capacitance matrixes to return.'
+        #         f'Did you execute analyze_setup()?')
+        #     return None
 
-        # Pandas output should have been set prior to opening Ansys,
-        # however, just confirming if changed by user through GUI.
-        settings.enable_pandas_output = True
+        # # Pandas output should have been set prior to opening Ansys,
+        # # however, just confirming if changed by user through GUI.
+        # settings.enable_pandas_output = True
 
-        setup_sweep_name = f'{self.current_setup_name}: AdaptivePass'
-        cap_data = self.current_app.post.get_solution_data(
-            expressions=all_C_matrices,
-            context="Original",
-            setup_sweep_name=setup_sweep_name,
-            variations={"Pass": ["All"]})
+        # setup_sweep_name = f'{self.current_setup_name}: AdaptivePass'
+        # cap_data = self.current_app.post.get_solution_data(
+        #     expressions=all_C_matrices,
+        #     context="Original",
+        #     setup_sweep_name=setup_sweep_name,
+        #     variations={"Pass": ["All"]})
 
-        c1_units = cap_data.units_data
+        # c1_units = cap_data.units_data
 
-        all_cap_data_magnitude = []
-        all_cap_data_magnitude_freqs = {}
+        # all_cap_data_magnitude = []
+        # all_cap_data_magnitude_freqs = {}
 
-        confirm_freq = cap_data.active_intrinsic['Freq']  # Is 5.0
-        # If a list is not returned, make one so can iterate through it.
-        if isinstance(confirm_freq, float):
-            confirm_freq = [confirm_freq]
+        # confirm_freq = cap_data.active_intrinsic['Freq']  # Is 5.0
+        # # If a list is not returned, make one so can iterate through it.
+        # if isinstance(confirm_freq, float):
+        #     confirm_freq = [confirm_freq]
 
-        for freq in confirm_freq:
-            all_cap_data_magnitude.append(freq)
-            for item in cap_data.intrinsics['Pass']:
-                #cap_real_imag = cap_data.full_matrix_real_imag
-                cap_mag = cap_data.full_matrix_mag_phase[0].iloc[int(item) - 1]
-                cap_mag_df = self.convert_to_dataframe(cap_mag)
-                all_cap_data_magnitude.append(cap_mag_df)
-            all_cap_data_magnitude_freqs[freq] = all_cap_data_magnitude
-        return all_cap_data_magnitude_freqs, None
+        # for freq in confirm_freq:
+        #     all_cap_data_magnitude.append(freq)
+        #     for item in cap_data.intrinsics['Pass']:
+        #         #cap_real_imag = cap_data.full_matrix_real_imag
+        #         cap_mag = cap_data.full_matrix_mag_phase[0].iloc[int(item) - 1]
+        #         cap_mag_df = self.convert_to_dataframe(cap_mag)
+        #         all_cap_data_magnitude.append(cap_mag_df)
+        #     all_cap_data_magnitude_freqs[freq] = all_cap_data_magnitude
+
+        #return all_cap_data_magnitude_freqs
+
+        # =============================
+
+        # The original implementation does not seem to fetch the correct matrix
+        # This implementation uses the same trick as that in pyEPR to read the matrix
+        # (i.e. let ansys export the matrix to a file and then read from it)
+
+        # Due to that the pyaedt API does not seem to provide interfaces for getting matrices for each pass,
+        # this method currently calls `get_capacitance_matrix` and therefore only return one(1) matrix as the last pass
+        # (with necessary conversions of the format (see below)).
+
+        # EXTREMELY UGLY workaround for compatibility with the horrible return format given by `get_capacitance_all_passes` in `q3d_renderer.py`
+        # (which is a dictionary pretending to be a list with indices starting from 1).
+        # Also, the values of the dictionary is `ndarray` (not `DataFrame` as documented in `q3d_renderer`)
+
+        # Compose unit DataFrame
+        # unit_table = {'pF':1e-12,}
+        # df_unit = pd.DataFrame(index=all_cap_data_magnitude[1].index, columns=all_cap_data_magnitude[1].columns)
+        # for row_name in all_cap_data_magnitude[1].index:
+        #     for col_name in all_cap_data_magnitude[1].columns:
+        #         key = f"C({row_name},{col_name})"
+        #         if key in c1_units:
+        #             df_unit.loc[row_name, col_name] = unit_table[c1_units[key]]
+        #         else:
+        #             df_unit.loc[row_name, col_name] = 1.0
+
+        # return {i:all_cap_data_magnitude[i].values*df_unit.values for i in range(1,len(all_cap_data_magnitude))}, None
+
+        df_cmat, units = self.get_capacitance_matrix(variation=variation)
+        conv = 1e-12 if units == "pf" else 1
+        return {1:df_cmat.values*conv}, None
 
     def get_convergence(self) -> bool:
         """Extracts convergence from Ansys simulation result
